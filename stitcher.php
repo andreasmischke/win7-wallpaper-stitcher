@@ -1,8 +1,42 @@
 #!/usr/bin/php
 <?php
 
+/**
+ *  Multiscreen Wallpaper Patcher
+ *  
+ *  Command line script that calls a custom Windows application that returns 
+ *  information about all active monitors (resolution, positioning). According 
+ *  to the gathered information the script looks for image files with these 
+ *  resolutions in the file name (e.g. wallpaper-1920x1080.jpg).
+ *  These image files are stitched together to one big image file that can be 
+ *  used as tiling wallpaper.
+ *  
+ *  @author    Andreas Mischke <andreas@mischke.me>
+ *  @see       https://github.com/andreasmischke/win7-wallpaper-stitcher
+ *  @license   © 2015 Licensed under WTFPL – http://www.wtfpl.net/
+ *  @version   1.0
+ */
+
+
+
+/**
+ *  Returns an array to map file endings to the appropriate fraction of the 
+ *  PHP GD library functions (these are e.g. imagejpeg() for JPG, imagepng() 
+ *  for PNG).
+ *  
+ *  The mapping array could also be defined globally, but to retain the 
+ *  functional programming style it is encapsulated in a function.
+ *  
+ *  @return string[] Mapping von Dateiendungen zu PHP-Funktionsnamen-
+ *          Bruchteilen
+ */
 function getExtensionToFunctionMapping()
 {
+	// with the use of `static` the variable survives a single function call.
+	// So `$mapping` is `null` with the first call and the if block is executed,
+	// e.g. `$mapping` gets defined. From then on `$mapping` keeps its value and
+	// just gets returned with all further calls without being redefined every
+	// time.
 	static $mappings = null;
 	
 	if($mappings === null)
@@ -26,6 +60,14 @@ function getExtensionToFunctionMapping()
 	return $mappings;
 }
 
+/**
+ * Returns the value of the specified option. The value is defined by command 
+ * line parameters if present or with an default/fallback parameter.
+ * 
+ * @param string $key option key
+ * 
+ * @return string option value
+ */
 function getOption($key)
 {
 	static $options = null;
@@ -45,6 +87,12 @@ function getOption($key)
 	return $options[$key];
 }
 
+/**
+ * Wrapper for the call of the Windows command line application. The result is
+ * cached so the application has to be run only once.
+ * 
+ * @return object[] array of screen info objects
+ */
 function getScreenInfo()
 {
 	static $screenInfo = null;
@@ -58,6 +106,17 @@ function getScreenInfo()
 	return $screenInfo;
 }
 
+/**
+ * Extracts the X-, Y-position, height and width from the screen info object.
+ * Was needed in an earlier version of the script since the information was in 
+ * a string value. The current version only restructures the object properties 
+ * into an array.
+ * 
+ * @param object $screen screen information as returned by `getScreenInfo()`
+ * 
+ * @return string[] array with X-, Y-position, height and width of the 
+ *                  specified screen
+ */
 function parseScreenDimensions($screen)
 {
 	return [
@@ -68,30 +127,74 @@ function parseScreenDimensions($screen)
 	];
 }
 
+/**
+ * @param the filename from which the extension shall be retrieved
+ * 
+ * @return the part after the last dot, i.e. the file type extension
+ */
 function getExtension($fileName)
 {
 	return substr($fileName, strrpos($fileName, ".") + 1);
 }
 
-function getFunctionNameForFileType($extension, $prefix)
+/**
+ * Builds PHP GD library function names from a common denominator and file type 
+ * specific suffixes.
+ * 
+ * @param string $extension The extension for which the suffix should be 
+ *                          determined. There must be a mapping for the suffix 
+ *                          in the function `getExtensionToFunctionMapping()`.
+ * @param string $prefix    The common denominator.
+ * 
+ * @return string function name
+ */
+function getFunctionNameForFileType($denominator, $extension)
 {
 	$mappings = getExtensionToFunctionMapping();
 	
 	return isset($mappings[$extension])
-		? $prefix . $mappings[$extension]
+		? $denominator . $mappings[$extension]
 		: null;
 }
 
+/**
+ * Returns the file type specific function to create an image object from an 
+ * existing file.
+ * 
+ * @param string $extension The extension for which the suffix should be 
+ *                          determined. There must be a mapping for the suffix 
+ *                          in the function `getExtensionToFunctionMapping()`.
+ * 
+ * @return string function name
+ */
 function getCreateFunctionNameForFileType($extension)
 {
-	return getFunctionNameForFileType($extension, 'imagecreatefrom');
+	return getFunctionNameForFileType('imagecreatefrom', $extension);
 }
 
+/**
+ * Returns the file type specific function to create an empty image object.
+ * 
+ * @param string $extension The extension for which the suffix should be 
+ *                          determined. There must be a mapping for the suffix 
+ *                          in the function `getExtensionToFunctionMapping()`.
+ * 
+ * @return string der Funktionsname
+ */
 function getSaveFunctionNameForFileType($extension)
 {
-	return getFunctionNameForFileType($extension, 'image');
+	return getFunctionNameForFileType('image', $extension);
 }
 
+/**
+ * Creates an absolute file path from the passed filename and the working 
+ * directory (@see `getOption()`).
+ *
+ * @param string $fileName the filename that should be appended to the current 
+ *                         working directory.
+ * 
+ * @return string the absolute file path
+ */
 function getWallpaperPath($fileName)
 {
 	$path = getOption("d");
@@ -104,11 +207,25 @@ function getWallpaperPath($fileName)
 	return $path . $fileName;
 }
 
+/**
+ * @return string[] the valid file extensions
+ */
 function getValidFileExtensions()
 {
 	return array_keys(getExtensionToFunctionMapping());
 }
 
+/**
+ * returns an array of file names in the current working directory (@see 
+ * `getOption()`). Optionally a filter function can be provided.
+ *
+ * @param function $filter An optional filter function. It gets a filename as 
+ *                         as parameter and should return `true` if the file 
+ *                         should be in the result set or `false` if the file 
+ *                         should be filtered out. (@see `array_filter()`)
+ * 
+ * @return string[] array of filenames
+ */
 function getFiles($filter = null)
 {
 	$files = preg_filter(
@@ -133,6 +250,14 @@ function getFiles($filter = null)
 	}
 }
 
+/**
+ * prints a line of text to standard output.
+ * 
+ * @param string $text The text to be printed
+ * @param array $args Optional array of arguments to be inserted in the output 
+ *                    text (@see `sprintf()`).
+ * @return void
+ */
 function println()
 {
 	$args = func_get_args();
@@ -147,11 +272,29 @@ function println()
 	}
 	echo PHP_EOL;
 }
-function printerr($text, $line = -1)
+
+/**
+ * prints an error message to standard output
+ *
+ * @param string $message The error message to be printed
+ * @param int $line Optional line number is appended to the message in format
+ *                  "ERROR: $message in line $line"
+ * 
+ * @return void
+ */
+function printerr($message, $line = -1)
 {
-	println("ERROR: %s %s", $text, ($line > -1) ? "in line " . $line : "");
+	println("ERROR: %s %s", $message, ($line > -1) ? "in line " . $line : "");
 }
-function debug($text = "")
+
+/**
+ * prints a debug message to standard output
+ * 
+ * @param string $message Optional debug message to be printed
+ *
+ * @return void
+ */
+function debug($message = "")
 {
 	$args = func_get_args();
 	
@@ -160,6 +303,20 @@ function debug($text = "")
 	call_user_func_array('println', $args);
 }
 
+/**
+ * prints a list to standard output where each item is prepended with a numeric 
+ * ID. The user is then prompted to enter the ID of their choice. If the 
+ * provided list is empty an error message is printed. If the user enters an 
+ * invalid ID (e.g. negative number, non-number characters, ...) an information 
+ * is printed, the list is printed again and the user is prompted to enter an 
+ * ID again.
+ * 
+ * @param string[] $list The list of choices which the user can choose from
+ * @param string $message Optional message text to be printed before the list.
+ *                        Default message is 'There are several choices: '.
+ * 
+ * @return string the user's choice
+ */
 function getUserChoiceFromList($list, $message = "There are several choices: ")
 {
 	if(!is_array($list) || count($list) == 0)
@@ -197,6 +354,11 @@ function getUserChoiceFromList($list, $message = "There are several choices: ")
 	}
 }
 
+/**
+ * Calculates the total needed canvas size from the screen info objects
+ *
+ * @return int[] an array with the total needed width and height
+ */
 function getTotalSize()
 {
 	static $totalSize = null;
@@ -230,6 +392,11 @@ function getTotalSize()
 	return $totalSize;
 }
 
+/**
+ * Wraps the global canvas object for the stitched result wallpaper
+ * 
+ * @return object the canvas
+ */
 function getCanvas()
 {
 	static $canvas = null;
@@ -244,6 +411,9 @@ function getCanvas()
 	return $canvas;
 }
 
+/**
+ * Ouch... Need to read that code in more detail. PHPDoc will follow, I hope...
+ */
 function getUserChoice()
 {
 	$println_args = array();
@@ -327,6 +497,11 @@ function getUserChoice()
 	
 }
 
+/**
+ * saves the stitched wallpaper. For the output filename @see `getOption()`.
+ * 
+ * @return void
+ */
 function saveFile()
 {
 	if(call_user_func(getSaveFunctionNameForFileType(getOption("f")), getCanvas(), getOption("o")))
@@ -340,6 +515,7 @@ function saveFile()
 	}
 }
 
+// The main doing. Needs more comments, I know...
 array_map(
 	function($screen) {
 		
@@ -417,7 +593,6 @@ array_map(
 	getScreenInfo()
 );
 
-
 if(null === getSaveFunctionNameForFileType(getOption("f")))
 {
 	printerr("Invalid output file format (-f parameter)");
@@ -441,4 +616,3 @@ else
 		saveFile();
 	}
 }
-
